@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket 測試</title>
+</head>
+<body>
+    <h1>WebSocket 測試頁面</h1>
+    <p>請開啟開發者工具 (F12) 並切換到 Console 查看訊息。</p>
+
+    <script>
+        // 建立 WebSocket 連線
+        const ws = new WebSocket("ws://localhost:3000?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIsImlhdCI6MTc1NTI0Mjc0OCwiZXhwIjoxNzU1MjQ2MzQ4fQ.wH1oftx_73X48SZgNV1D_SWYy-gd4d5s6PIcY3XtABo");
+
+        // 連線成功時觸發
+        ws.onopen = () => {
+          console.log("連線成功！");
+          ws.send(JSON.stringify({ content: "Hello from a web page!" }));
+        };
+
+        // 收到訊息時觸發
+        ws.onmessage = (event) => {
+          console.log("收到訊息：", event.data);
+        };
+
+        // 連線關閉時觸發
+        ws.onclose = () => {
+          console.log("連線已關閉");
+        };
+
+        // 發生錯誤時觸發
+        ws.onerror = (error) => {
+          console.error("WebSocket 錯誤：", error);
+        };
+    </script>
+</body>
+</html>
