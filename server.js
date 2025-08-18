@@ -30,9 +30,15 @@ app.use('/api/groups', groupRoutes); // <-- 掛載新路由
 
 // WebSocket 連線處理
 wss.on('connection', (ws, req) => {
-  // 從請求 URL 中取得 token
-  const urlParams = new URLSearchParams(req.url.slice(1));
-  const token = urlParams.get('token');
+  // 檢查請求 URL 是否為 /api/websocket
+  if (req.url !== '/api/websocket') {
+    ws.close(1000, 'Invalid WebSocket path');
+    console.log('Client connected to an invalid WebSocket path, connection closed.');
+    return;
+  }
+
+  // 從請求標頭中取得 token
+  const token = req.headers['authorization']?.split(' ')[1];
 
   if (!token) {
     ws.close(1008, 'Token not provided'); // 關閉連線並提供錯誤碼
@@ -55,68 +61,68 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-ws.on('message', async (data) => {
-  try {
-    const message = JSON.parse(data);
-    const senderId = ws.userId;
+  ws.on('message', async (data) => {
+    try {
+      const message = JSON.parse(data);
+      const senderId = ws.userId;
 
-    // 檢查訊息是否有效
-    if (!message.content || (!message.receiverId && !message.groupId)) {
-      console.error('Received message without valid content, receiverId, or groupId, skipping save.');
-      return;
+      // 檢查訊息是否有效
+      if (!message.content || (!message.receiverId && !message.groupId)) {
+        console.error('Received message without valid content, receiverId, or groupId, skipping save.');
+        return;
+      }
+
+      let newMessage;
+      let recipients = [];
+
+      // 判斷是群組聊天還是一對一聊天
+      if (message.groupId) {
+        // 這是群組聊天
+        const members = await GroupMember.findAll({ where: { groupId: message.groupId } });
+        recipients = members.map(member => member.userId);
+
+        newMessage = await Message.create({
+          content: message.content,
+          senderId: senderId,
+          groupId: message.groupId,
+        });
+
+      } else if (message.receiverId) {
+        // 這是一對一聊天
+        recipients = [senderId, message.receiverId];
+
+        newMessage = await Message.create({
+          content: message.content,
+          senderId: senderId,
+          receiverId: message.receiverId,
+        });
+      }
+
+      if (newMessage) {
+        const messageWithDetails = {
+          id: newMessage.id,
+          content: newMessage.content,
+          senderId: newMessage.senderId,
+          receiverId: newMessage.receiverId,
+          groupId: newMessage.groupId,
+          createdAt: newMessage.createdAt,
+        };
+
+        const messageString = JSON.stringify(messageWithDetails);
+
+        // 廣播給所有相關客戶端
+        wss.clients.forEach(client => {
+          if (client.readyState === ws.OPEN && recipients.includes(client.userId)) {
+            client.send(messageString);
+          }
+        });
+        console.log('Message saved and sent to specific clients:', messageWithDetails);
+      }
+
+    } catch (error) {
+      console.error('Failed to save or process message:', error);
     }
-
-    let newMessage;
-    let recipients = [];
-
-    // 判斷是群組聊天還是一對一聊天
-    if (message.groupId) {
-      // 這是群組聊天
-      const members = await GroupMember.findAll({ where: { groupId: message.groupId } });
-      recipients = members.map(member => member.userId);
-
-      newMessage = await Message.create({
-        content: message.content,
-        senderId: senderId,
-        groupId: message.groupId,
-      });
-
-    } else if (message.receiverId) {
-      // 這是一對一聊天
-      recipients = [senderId, message.receiverId];
-
-      newMessage = await Message.create({
-        content: message.content,
-        senderId: senderId,
-        receiverId: message.receiverId,
-      });
-    }
-
-    if (newMessage) {
-      const messageWithDetails = {
-        id: newMessage.id,
-        content: newMessage.content,
-        senderId: newMessage.senderId,
-        receiverId: newMessage.receiverId,
-        groupId: newMessage.groupId,
-        createdAt: newMessage.createdAt,
-      };
-
-      const messageString = JSON.stringify(messageWithDetails);
-
-      // 廣播給所有相關客戶端
-      wss.clients.forEach(client => {
-        if (client.readyState === ws.OPEN && recipients.includes(client.userId)) {
-          client.send(messageString);
-        }
-      });
-      console.log('Message saved and sent to specific clients:', messageWithDetails);
-    }
-
-  } catch (error) {
-    console.error('Failed to save or process message:', error);
-  }
-});
+  });
 
   ws.on('close', () => {
     console.log(`Client with userId ${ws.userId} disconnected.`);
@@ -124,26 +130,17 @@ ws.on('message', async (data) => {
 });
 
 // 同步資料庫並啟動伺服器
-// sequelize.sync({ force: false })
-//   .then(() => {
-//     console.log('Database & tables created!');
-//     const PORT = process.env.PORT || 3000;
-//     // 伺服器現在使用 server.listen()，而不是 app.listen()
-//     server.listen(PORT, () => {
-//       console.log(`Server is running on port ${PORT}`);
-//     });
-//   })
-//   .catch(err => {
-//     console.error('Failed to connect to the database:', err);
-//   });
-
-  const PORT = process.env.PORT || 3000; // <-- 監聽 Render 的 Port 或本地的 3000
+const PORT = process.env.PORT || 3000; // <-- 監聽 Render 的 Port 或本地的 3000
 
 // 同步資料庫並啟動伺服器
 sequelize.sync({ force: false }) // 記得改回 false
   .then(() => {
     console.log('Database synchronized!');
-    app.listen(PORT, () => {
+    // *** 修正點在這裡！使用 server.listen() 來同時處理 HTTP 和 WebSocket 請求。 ***
+    server.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
   })
+  .catch(err => {
+    console.error('Failed to connect to the database:', err);
+  });
