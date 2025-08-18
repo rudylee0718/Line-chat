@@ -62,6 +62,12 @@ wss.on('connection', (ws, req) => {
   }
 
   ws.on('message', async (data) => {
+    // 新增的檢查：如果訊息是 'ping'，則忽略它
+    if (data.toString() === 'ping') {
+      console.log('Received ping message, skipping processing.');
+      return;
+    }
+
     try {
       const message = JSON.parse(data);
       const senderId = ws.userId;
