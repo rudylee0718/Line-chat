@@ -1,6 +1,6 @@
 // controllers/userController.js
 const User = require('../models/user');
-const pool = require('../db'); // 確保這行已經存在
+const pool = require('../config/database'); // 確保這行已經存在
 
 // 獲取所有使用者列表
 exports.getUsers = async (req, res) => {
