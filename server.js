@@ -8,7 +8,7 @@ const sequelize = require('./config/database');
 const authRoutes = require('./routes/authRoutes');
 const messageRoutes = require('./routes/messageRoutes'); // <-- 引入新路由
 const groupRoutes = require('./routes/groupRoutes'); // <-- 引入新路由
-
+const friendRequestRoutes = require('./routes/friendRequestRoutes');
 const User = require('./models/user');
 const Message = require('./models/message'); // <-- 引入 Message 模型
 const Group = require('./models/group'); // 引入 Group 模型
@@ -27,7 +27,7 @@ app.use(bodyParser.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes); // <-- 掛載新路由
 app.use('/api/groups', groupRoutes); // <-- 掛載新路由
-
+app.use('/api/friends', friendRequestRoutes);
 // WebSocket 連線處理
 wss.on('connection', (ws, req) => {
   // 檢查請求 URL 是否為 /api/websocket
