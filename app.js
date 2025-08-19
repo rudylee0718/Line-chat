@@ -22,7 +22,7 @@ const users = [
 // 訊息清單，使用陣列模擬，僅用於示範
 let messages = [];
 
-// 新增一個模擬的好友關係列表
+// 模擬的好友關係列表
 // 格式: { userId, friendId }
 let friends = [];
 
@@ -87,7 +87,7 @@ wss.on('connection', (ws, req) => {
               // 同時發送給自己，以確保聊天室同步
               const senderWs = clients.get(userId);
               if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-                senderWs.send(json.stringify(newMessage));
+                senderWs.send(JSON.stringify(newMessage));
               }
             } else if (message.toString() === 'ping') {
               ws.send('pong');
@@ -159,6 +159,29 @@ app.get('/api/messages/:receiverId', authenticateToken, (req, res) => {
   res.status(200).send(relevantMessages);
 });
 
+/**
+ * @api {get} /api/friends 獲取好友列表
+ * @apiHeader {String} Authorization JWT Token
+ * @apiSuccess {Object[]} friends 好友清單
+ */
+app.get('/api/friends', authenticateToken, (req, res) => {
+  const myId = req.user.id;
+  const myFriends = friends
+    .filter(f => f.userId === myId || f.friendId === myId)
+    .map(f => f.userId === myId ? f.friendId : f.userId);
+  
+  const uniqueFriendIds = [...new Set(myFriends)];
+  const friendDetails = uniqueFriendIds.map(id => {
+    const friendUser = users.find(u => u.id === id);
+    return {
+      id: friendUser.id,
+      username: friendUser.username
+    };
+  });
+  
+  res.status(200).send(friendDetails);
+});
+
 // 呼叫 friendRequestController 來設定其路由
 friendRequestController(app, wss, clients, users, friends, authenticateToken);
 
@@ -167,3 +190,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`伺服器正在 port ${PORT} 上運行`);
 });
+
