@@ -8,37 +8,17 @@ const sequelize = require('./config/database');
 const authRoutes = require('./routes/authRoutes');
 const messageRoutes = require('./routes/messageRoutes'); // <-- 引入新路由
 const groupRoutes = require('./routes/groupRoutes'); // <-- 引入新路由
-const friendRoutes = require('./routes/friendRoutes'); // <-- 引入新路由
-const { setWss } = require('./websockets'); // 引入新的工具函數
 
 const User = require('./models/user');
 const Message = require('./models/message'); // <-- 引入 Message 模型
-const FriendRequest = require('./models/friendRequest'); // 引入 FriendRequest 模型
 const Group = require('./models/group'); // 引入 Group 模型
 const GroupMember = require('./models/groupMember'); // 引入 GroupMember 模型
 const jwt = require('jsonwebtoken'); // 引入 jsonwebtoken 套件
-
-// 定義關聯
-User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
-Message.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
-
-User.hasMany(Message, { foreignKey: 'receiverId', as: 'receivedMessages' });
-Message.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
-
-Message.belongsTo(Group, { foreignKey: 'groupId', as: 'group' });
-Group.hasMany(Message, { foreignKey: 'groupId', as: 'messages' });
-
-// 新增關聯
-User.hasMany(FriendRequest, { foreignKey: 'senderId', as: 'sentRequests' });
-User.hasMany(FriendRequest, { foreignKey: 'receiverId', as: 'receivedRequests' });
-FriendRequest.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
-FriendRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 
 const app = express();
 const server = http.createServer(app); // 建立一個 HTTP 伺服器，Express 應用程式作為其處理程式
 
 const wss = new WebSocketServer({ server }); // 將 WebSocket 伺服器附加到同一個 HTTP 伺服器上
-setWss(wss); // 將 wss 實例儲存到工具函數中
 
 // 中介軟體 (Middleware)
 app.use(bodyParser.json());
@@ -47,7 +27,6 @@ app.use(bodyParser.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes); // <-- 掛載新路由
 app.use('/api/groups', groupRoutes); // <-- 掛載新路由
-app.use('/api/friends', friendRoutes); // <-- 掛載新路由
 
 // WebSocket 連線處理
 wss.on('connection', (ws, req) => {
@@ -75,7 +54,7 @@ wss.on('connection', (ws, req) => {
     // 將使用者 ID 儲存在 WebSocket 物件上，方便後續使用
     ws.userId = userId;
     console.log(`Client with userId ${userId} connected.`);
-    
+
   } catch (err) {
     ws.close(1008, 'Invalid token'); // 如果 Token 無效，關閉連線
     console.error('Client connected with an invalid token, connection closed.');
@@ -171,4 +150,4 @@ sequelize.sync({ force: false }) // 記得改回 false
   .catch(err => {
     console.error('Failed to connect to the database:', err);
   });
-
+  
