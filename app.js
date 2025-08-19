@@ -140,7 +140,12 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
-// 獲取所有用戶列表 API (用於示範)
+/**
+ * @api {get} /api/users 獲取所有用戶列表
+ * @apiDescription 新增 API，讓前端可以取得所有用戶的資料，以便發送好友請求。
+ * @apiHeader {String} Authorization JWT Token
+ * @apiSuccess {Object[]} users 所有用戶的清單
+ */
 app.get('/api/users', authenticateToken, (req, res) => {
   const allUsers = users.map(u => ({ id: u.id, username: u.username }));
   res.status(200).send(allUsers);
