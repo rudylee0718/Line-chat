@@ -1,3 +1,47 @@
+// app.js
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const WebSocket = require('ws');
+const http = require('http');
+
+// 匯入 friendRequestController 模組
+const friendRequestController = require('./friendRequestController');
+
+const app = express();
+app.use(bodyParser.json());
+
+// 簡單的資料庫模擬
+const users = [
+  { id: 1, username: 'user1', passwordHash: bcrypt.hashSync('password123', 8) },
+  { id: 2, username: 'user2', passwordHash: bcrypt.hashSync('password123', 8) },
+  { id: 3, username: 'user3', passwordHash: bcrypt.hashSync('password123', 8) },
+];
+// 訊息清單，使用陣列模擬，僅用於示範
+let messages = [];
+
+// 新增一個模擬的好友關係列表
+// 格式: { userId, friendId }
+let friends = [];
+
+// JWT 密鑰
+const SECRET_KEY = 'your_super_secret_key';
+
+// 認證中間件
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (token == null) return res.sendStatus(401);
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
 // WebSocket 伺服器
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -25,6 +69,7 @@ wss.on('connection', (ws, req) => {
             if (data.receiverId && data.content) {
               const newMessage = {
                 senderId: userId,
+                senderUsername: user.username, // 新增 senderUsername
                 receiverId: data.receiverId,
                 content: data.content,
                 createdAt: new Date().toISOString(),
@@ -42,7 +87,7 @@ wss.on('connection', (ws, req) => {
               // 同時發送給自己，以確保聊天室同步
               const senderWs = clients.get(userId);
               if (senderWs && senderWs.readyState === WebSocket.OPEN) {
-                senderWs.send(JSON.stringify(newMessage));
+                senderWs.send(json.stringify(newMessage));
               }
             } else if (message.toString() === 'ping') {
               ws.send('pong');
@@ -115,7 +160,7 @@ app.get('/api/messages/:receiverId', authenticateToken, (req, res) => {
 });
 
 // 呼叫 friendRequestController 來設定其路由
-friendRequestController(app, wss, clients, users, authenticateToken);
+friendRequestController(app, wss, clients, users, friends, authenticateToken);
 
 // 啟動伺服器
 const PORT = process.env.PORT || 3000;
