@@ -1,118 +1,64 @@
-// controllers/friendRequestController.js
-const { User, FriendRequest } = require('../models');
-const { getWss } = require('../websockets'); // 引入 WebSocket Server 實例
+// friendRequestController.js
 
-// 發送好友請求
-const sendFriendRequest = async (req, res) => {
-  const senderId = req.user.id;
-  const { receiverId } = req.body;
+const jwt = require('jsonwebtoken');
 
-  if (senderId === receiverId) {
-    return res.status(400).json({ message: '無法向自己發送好友請求' });
-  }
+// 簡單的資料庫模擬 - 好友請求清單
+let friendRequests = [];
 
-  try {
-    const existingRequest = await FriendRequest.findOne({
-      where: {
-        senderId: senderId,
-        receiverId: receiverId,
-      },
-    });
+// 這個函式會將路由邏輯附加到 Express 應用程式上
+// 並接收 WebSocket 相關的變數
+module.exports = function(app, wss, clients, users, authenticateToken) {
+  
+  /**
+   * @api {post} /api/friends/request 發送好友請求
+   * @apiHeader {String} Authorization JWT Token
+   * @apiParam {Number} receiverId 接收者的使用者ID
+   * @apiSuccess {String} message 請求發送成功訊息
+   * @apiError (400) BadRequest 無法向自己發送請求
+   * @apiError (404) NotFound 接收者使用者不存在
+   * @apiError (409) Conflict 好友請求已發出
+   */
+  app.post('/api/friends/request', authenticateToken, (req, res) => {
+    const senderId = req.user.id;
+    const senderUsername = req.user.username;
+    const { receiverId } = req.body;
 
+    // 檢查接收者是否存在
+    const receiverExists = users.some(user => user.id === receiverId);
+    if (!receiverExists) {
+      return res.status(404).send({ message: '接收者使用者不存在' });
+    }
+
+    // 檢查是否已發出過請求或已是好友
+    const existingRequest = friendRequests.find(
+      req => req.senderId === senderId && req.receiverId === receiverId
+    );
     if (existingRequest) {
-      return res.status(400).json({ message: '好友請求已發送' });
+      return res.status(409).send({ message: '好友請求已發出' });
     }
 
-    const newRequest = await FriendRequest.create({
-      senderId: senderId,
-      receiverId: receiverId,
-      status: 'pending',
-    });
-
-    const sender = await User.findByPk(senderId, {
-      attributes: ['id', 'username'],
-    });
-
-    // 通過 WebSocket 向接收者發送即時通知
-    const wss = getWss();
-    if (wss) {
-      wss.clients.forEach(client => {
-        if (client.readyState === client.OPEN && client.userId === receiverId) {
-          console.log(`Sending real-time friend request notification to user ${receiverId}`);
-          client.send(JSON.stringify({
-            type: 'friendRequest',
-            senderId: sender.id,
-            senderUsername: sender.username,
-          }));
-        }
-      });
+    // 檢查是否向自己發送請求
+    if (senderId === receiverId) {
+      return res.status(400).send({ message: '無法向自己發送好友請求' });
     }
 
-    return res.status(200).json({ message: '好友請求已發送' });
-  } catch (error) {
-    console.error('Failed to send friend request:', error);
-    return res.status(500).json({ message: '伺服器錯誤', error: error.message });
-  }
-};
+    // 建立新的請求並儲存 (模擬)
+    const newRequest = { senderId, receiverId, status: 'pending', createdAt: new Date().toISOString() };
+    friendRequests.push(newRequest);
 
-// 接受好友請求
-const acceptFriendRequest = async (req, res) => {
-  const receiverId = req.user.id;
-  const { requesterId } = req.body;
-
-  try {
-    const request = await FriendRequest.findOne({
-      where: {
-        senderId: requesterId,
-        receiverId: receiverId,
-        status: 'pending',
-      },
-    });
-
-    if (!request) {
-      return res.status(404).json({ message: '找不到待處理的好友請求' });
+    // 透過 WebSocket 發送通知
+    const receiverWs = clients.get(receiverId);
+    if (receiverWs && receiverWs.readyState === wss.OPEN) {
+      receiverWs.send(JSON.stringify({
+        type: 'friend_request',
+        senderId: senderId,
+        senderUsername: senderUsername,
+      }));
+      console.log(`好友請求通知已發送給 ${receiverId}`);
     }
 
-    // 更新請求狀態
-    request.status = 'accepted';
-    await request.save();
+    res.status(200).send({ message: '好友請求已發送' });
+  });
 
-    return res.status(200).json({ message: '好友請求已接受' });
-  } catch (error) {
-    console.error('Failed to accept friend request:', error);
-    return res.status(500).json({ message: '伺服器錯誤', error: error.message });
-  }
-};
-
-// 獲取好友請求列表
-const getFriendRequests = async (req, res) => {
-  const userId = req.user.id;
-
-  try {
-    const requests = await FriendRequest.findAll({
-      where: {
-        receiverId: userId,
-        status: 'pending',
-      },
-      include: [{ model: User, as: 'sender', attributes: ['id', 'username'] }],
-    });
-
-    const formattedRequests = requests.map(req => ({
-      requesterId: req.sender.id,
-      requesterUsername: req.sender.username,
-      createdAt: req.createdAt,
-    }));
-
-    return res.status(200).json(formattedRequests);
-  } catch (error) {
-    console.error('Failed to get friend requests:', error);
-    return res.status(500).json({ message: '伺服器錯誤', error: error.message });
-  }
-};
-
-
-module.exports = {
-  sendFriendRequest,
-  acceptFriendRequest,
-  getFriendRequests,
+  console.log("好友請求路由已載入");
 };
