@@ -1,9 +1,17 @@
 // friendRequestRoutes.js
 const express = require('express');
 const router = express.Router();
-// 引入你定義好的 Sequelize 模型
-const FriendRequest = require('../models/FriendRequest');
-const User = require('../models/User'); // 假設你需要 User 模型來進行關聯查詢
+const { Pool } = require('pg');
+
+// --- PostgreSQL 資料庫連線設定 (已修正) ---
+// 使用完整的 DATABASE_URL 並強制啟用 SSL，以適應 Render 等託管平台
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        // 由於 Render 使用自簽憑證，必須設定 rejectUnauthorized 為 false
+        rejectUnauthorized: false
+    }
+});
 
 // --- 路由 ---
 
@@ -15,41 +23,37 @@ const User = require('../models/User'); // 假設你需要 User 模型來進行�
  */
 router.post('/request', async (req, res) => {
     try {
+        // 從 Flutter 請求主體中獲取 receiverId
         const { receiverId } = req.body;
-        const senderId = req.user.id;
+        
+        // 確保你的認證中介軟體 (middleware) 已經將用戶 ID 附加到 req.user 上
+        const senderId = req.user.id; 
 
+        // 檢查請求主體是否包含 receiverId
         if (!receiverId) {
             return res.status(400).json({ message: '發送請求失敗：缺少接收者 ID。' });
         }
 
+        // 避免用戶向自己發送請求
         if (senderId === receiverId) {
             return res.status(400).json({ message: '你無法向自己發送好友請求。' });
         }
 
-        // 使用 Sequelize 來檢查是否已存在請求或已是好友
-        const existingRequest = await FriendRequest.findOne({
-            where: {
-                // 檢查是否已存在待處理請求
-                // 或是雙方已經是好友（無論是誰發起的請求）
-                [Sequelize.Op.or]: [
-                    { senderId: senderId, recipientId: receiverId, status: 'pending' },
-                    { senderId: receiverId, recipientId: senderId, status: 'pending' },
-                    { 
-                        [Sequelize.Op.and]: [
-                            { 
-                                [Sequelize.Op.or]: [
-                                    { senderId: senderId, recipientId: receiverId },
-                                    { senderId: receiverId, recipientId: senderId }
-                                ]
-                            },
-                            { status: 'accepted' }
-                        ]
-                    }
-                ]
-            }
-        });
-
-        if (existingRequest) {
+        // 檢查是否已經存在待處理的請求或他們已是好友
+        const checkQuery = `
+            SELECT * FROM friend_requests 
+            WHERE 
+                -- 檢查是否已存在待處理的請求 (無論誰發送給誰)
+                (sender_id = $1 AND recipient_id = $2 AND status = 'pending')
+                OR (sender_id = $2 AND recipient_id = $1 AND status = 'pending')
+                -- 檢查是否已經是好友 (無論誰發送給誰)
+                OR ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)) AND status = 'accepted'
+        `;
+        const checkResult = await pool.query(checkQuery, [senderId, receiverId]);
+        
+        if (checkResult.rows.length > 0) {
+            // 根據不同情況返回不同的訊息
+            const existingRequest = checkResult.rows[0];
             if (existingRequest.status === 'pending') {
                 return res.status(409).json({ message: '好友請求已存在。' });
             } else if (existingRequest.status === 'accepted') {
@@ -57,19 +61,21 @@ router.post('/request', async (req, res) => {
             }
         }
 
-        // 使用 Sequelize 插入新的好友請求
-        const newRequest = await FriendRequest.create({
-            senderId,
-            recipientId: receiverId,
-            status: 'pending'
-        });
+        // 插入新的好友請求到資料庫
+        const insertQuery = `
+            INSERT INTO friend_requests (sender_id, recipient_id, status)
+            VALUES ($1, $2, 'pending')
+            RETURNING *;
+        `;
+        const { rows } = await pool.query(insertQuery, [senderId, receiverId]);
+        const newRequest = rows[0];
 
         res.status(200).json({ 
             message: '好友請求發送成功。', 
             request: {
                 _id: newRequest.id,
-                sender: newRequest.senderId,
-                recipient: newRequest.recipientId,
+                sender: senderId,
+                recipient: newRequest.recipient_id,
                 status: newRequest.status,
             }
         });
@@ -79,37 +85,39 @@ router.post('/request', async (req, res) => {
     }
 });
 
-/**
- * @route   GET /api/friends/requests
- * @desc    獲取所有待處理的好友請求
- * @access  Private (需要認證)
- */
+// 獲取所有待處理的好友請求
+// GET /api/friends/requests
 router.get('/requests', async (req, res) => {
     try {
         const currentUserId = req.user.id;
 
-        // 使用 Sequelize 關聯查詢，並包含 sender 的資訊
-        const pendingRequests = await FriendRequest.findAll({
-            where: {
-                recipientId: currentUserId,
-                status: 'pending'
-            },
-            include: [{
-                model: User,
-                as: 'sender', // 假設你在模型關聯中設定了別名
-                attributes: ['id', 'username', 'avatar']
-            }],
-            order: [['createdAt', 'DESC']]
-        });
-        
-        // 格式化查詢結果
-        const formattedRequests = pendingRequests.map(request => ({
-            _id: request.id,
-            createdAt: request.createdAt,
+        const query = `
+            SELECT 
+                fr.id,
+                fr.created_at,
+                u.id AS sender_id,
+                u.username AS sender_username,
+                u.avatar AS sender_avatar
+            FROM 
+                friend_requests AS fr
+            JOIN 
+                users AS u ON fr.sender_id = u.id
+            WHERE 
+                fr.recipient_id = $1 AND fr.status = 'pending'
+            ORDER BY
+                fr.created_at DESC;
+        `;
+
+        const { rows } = await pool.query(query, [currentUserId]);
+
+        // 將 SQL 查詢結果轉換成前端需要的格式
+        const formattedRequests = rows.map(row => ({
+            _id: row.id,
+            createdAt: row.created_at,
             sender: {
-                _id: request.sender.id,
-                username: request.sender.username,
-                avatar: request.sender.avatar
+                _id: row.sender_id,
+                username: row.sender_username,
+                avatar: row.sender_avatar,
             }
         }));
 
@@ -120,12 +128,9 @@ router.get('/requests', async (req, res) => {
     }
 });
 
-/**
- * @route   POST /api/friends/reject
- * @desc    拒絕一個好友請求
- * @access  Private (需要認證)
- * @body    { requestId: '...' }
- */
+// 拒絕一個好友請求
+// POST /api/friends/reject
+// 請求主體 (body) 應包含 { requestId: '...' }
 router.post('/reject', async (req, res) => {
     try {
         const { requestId } = req.body;
@@ -135,21 +140,26 @@ router.post('/reject', async (req, res) => {
             return res.status(400).json({ message: '缺少好友請求 ID。' });
         }
 
-        // 檢查請求是否存在且屬於當前用戶
-        const requestToReject = await FriendRequest.findOne({
-            where: {
-                id: requestId,
-                recipientId: currentUserId,
-                status: 'pending'
-            }
-        });
+        const checkQuery = `
+            SELECT recipient_id FROM friend_requests WHERE id = $1;
+        `;
+        const checkResult = await pool.query(checkQuery, [requestId]);
 
-        if (!requestToReject) {
-            return res.status(404).json({ message: '找不到此好友請求或你無權拒絕。' });
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ message: '找不到此好友請求。' });
         }
         
-        // 使用 Sequelize 更新請求狀態
-        await requestToReject.update({ status: 'rejected' });
+        if (checkResult.rows[0].recipient_id !== currentUserId) {
+            return res.status(403).json({ message: '你無權拒絕此請求。' });
+        }
+
+        const updateQuery = `
+            UPDATE friend_requests 
+            SET status = 'rejected'
+            WHERE id = $1 AND recipient_id = $2
+            RETURNING id;
+        `;
+        await pool.query(updateQuery, [requestId, currentUserId]);
 
         res.status(200).json({ message: '好友請求已成功拒絕。', requestId });
     } catch (error) {
