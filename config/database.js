@@ -28,21 +28,20 @@ require('dotenv').config();
 
 const { Sequelize } = require('sequelize');
 
-// Render 預設會提供一個名為 DATABASE_URL 的環境變數
-// 它包含了完整的連線字串，包含 SSL 相關設定
+// 檢查 DATABASE_URL 是否存在，如果不存在則拋出明確的錯誤
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is not set!');
+}
+
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
-  // 指定資料庫方言
   dialect: 'postgres',
-  // 這行可以幫助 Sequelize 正確解析 DATABASE_URL
   protocol: 'postgres',
-  // 透過這行，Sequelize 會自動處理 SSL 憑證
   dialectOptions: {
     ssl: {
       require: true,
       rejectUnauthorized: false
     }
   },
-  // 如果你不想在終端機看到所有 SQL 查詢，可以設為 false
   logging: false
 });
 
