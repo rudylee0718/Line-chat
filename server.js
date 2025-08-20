@@ -1,39 +1,45 @@
 // server.js
-require('dotenv').config(); // 載入環境變數
+require('dotenv').config();
 const express = require('express');
-const http = require('http'); // 引入 Node.js 內建的 http 模組
-const { WebSocketServer } = require('ws'); // 引入 WebSocketServer
+const http = require('http');
+const { WebSocketServer } = require('ws');
 const bodyParser = require('body-parser');
 const sequelize = require('./config/database');
+
+// 引入所有路由和中介軟體
 const authRoutes = require('./routes/authRoutes');
-const messageRoutes = require('./routes/messageRoutes'); // <-- 引入新路由
-const groupRoutes = require('./routes/groupRoutes'); // <-- 引入新路由
+const messageRoutes = require('./routes/messageRoutes');
+const groupRoutes = require('./routes/groupRoutes');
+const authMiddleware = require('./middleware/auth');
 const friendRequestRoutes = require('./routes/friendRequestRoutes');
-// 引入新的 userRoutes
 const userRoutes = require('./routes/userRoutes');
 
 const User = require('./models/user');
-const Message = require('./models/message'); // <-- 引入 Message 模型
-const Group = require('./models/group'); // 引入 Group 模型
-const GroupMember = require('./models/groupMember'); // 引入 GroupMember 模型
-const jwt = require('jsonwebtoken'); // 引入 jsonwebtoken 套件
+const Message = require('./models/message');
+const Group = require('./models/group');
+const GroupMember = require('./models/groupMember');
+const jwt = require('jsonwebtoken');
 
 const app = express();
-const server = http.createServer(app); // 建立一個 HTTP 伺服器，Express 應用程式作為其處理程式
+const server = http.createServer(app);
 
-const wss = new WebSocketServer({ server }); // 將 WebSocket 伺服器附加到同一個 HTTP 伺服器上
+const wss = new WebSocketServer({ server });
 
-// 中介軟體 (Middleware)
+// --- 中介軟體 (Middleware) ---
 app.use(bodyParser.json());
 
-// 掛載認證路由
+// 優先掛載不需要認證的路由
 app.use('/api/auth', authRoutes);
-app.use('/api/messages', messageRoutes); // <-- 掛載新路由
-app.use('/api/groups', groupRoutes); // <-- 掛載新路由
-app.use('/api/friends', friendRequestRoutes);
-app.use('/api/users', userRoutes); // <-- 新增這行
 
-// WebSocket 連線處理
+// 再掛載需要認證的路由，並在此之前使用 authMiddleware
+// 這樣只有當請求路徑不是 /api/auth 時，才會執行認證檢查
+app.use(authMiddleware);
+app.use('/api/messages', messageRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/friends', friendRequestRoutes);
+app.use('/api/users', userRoutes);
+
+// --- WebSocket 連線處理 ---
 wss.on('connection', (ws, req) => {
   // 檢查請求 URL 是否為 /api/websocket
   if (req.url !== '/api/websocket') {
@@ -46,22 +52,20 @@ wss.on('connection', (ws, req) => {
   const token = req.headers['authorization']?.split(' ')[1];
 
   if (!token) {
-    ws.close(1008, 'Token not provided'); // 關閉連線並提供錯誤碼
+    ws.close(1008, 'Token not provided');
     console.log('Client connected without a token, connection closed.');
     return;
   }
 
   try {
-    // 驗證 Token 並取得使用者 ID
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const userId = decoded.userId;
 
     // 將使用者 ID 儲存在 WebSocket 物件上，方便後續使用
     ws.userId = userId;
     console.log(`Client with userId ${userId} connected.`);
-
   } catch (err) {
-    ws.close(1008, 'Invalid token'); // 如果 Token 無效，關閉連線
+    ws.close(1008, 'Invalid token');
     console.error('Client connected with an invalid token, connection closed.');
     return;
   }
@@ -97,7 +101,6 @@ wss.on('connection', (ws, req) => {
           senderId: senderId,
           groupId: message.groupId,
         });
-
       } else if (message.receiverId) {
         // 這是一對一聊天
         recipients = [senderId, message.receiverId];
@@ -129,7 +132,6 @@ wss.on('connection', (ws, req) => {
         });
         console.log('Message saved and sent to specific clients:', messageWithDetails);
       }
-
     } catch (error) {
       console.error('Failed to save or process message:', error);
     }
@@ -140,14 +142,12 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// 同步資料庫並啟動伺服器
-const PORT = process.env.PORT || 3000; // <-- 監聽 Render 的 Port 或本地的 3000
+// --- 同步資料庫並啟動伺服器 ---
+const PORT = process.env.PORT || 3000;
 
-// 同步資料庫並啟動伺服器
-sequelize.sync({ force: false }) // 記得改回 false
+sequelize.sync({ force: false })
   .then(() => {
     console.log('Database synchronized!');
-    // *** 修正點在這裡！使用 server.listen() 來同時處理 HTTP 和 WebSocket 請求。 ***
     server.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
@@ -155,4 +155,3 @@ sequelize.sync({ force: false }) // 記得改回 false
   .catch(err => {
     console.error('Failed to connect to the database:', err);
   });
-  
