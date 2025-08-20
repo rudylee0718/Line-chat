@@ -1,10 +1,9 @@
 // friendRequestRoutes.js
 const express = require('express');
 const router = express.Router();
-const { Pool } = require('pg'); // 從 'pg' 模組引入 Pool
+const { Pool } = require('pg');
 
 // --- PostgreSQL 資料庫連線設定 ---
-// 你應該將這些設定放在一個環境變數檔案 (例如 .env) 中
 const pool = new Pool({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -13,36 +12,81 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
-// --- 資料表結構 (SQL) ---
-// 你需要在你的資料庫中執行這些 SQL 指令來創建資料表
-/*
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username VARCHAR(255) NOT NULL UNIQUE,
-    avatar VARCHAR(255),
-    -- 其他用戶欄位...
-);
-
-CREATE TABLE friend_requests (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    sender_id UUID NOT NULL REFERENCES users(id),
-    recipient_id UUID NOT NULL REFERENCES users(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    -- 確保用戶不能重複發送請求
-    UNIQUE (sender_id, recipient_id)
-);
-*/
-
 // --- 路由 ---
+
+/**
+ * @route   POST /api/friends/request
+ * @desc    發送好友請求
+ * @access  Private (需要認證)
+ * @body    { receiverId: '要發送請求的用戶 ID' }
+ */
+router.post('/request', async (req, res) => {
+    try {
+        // 從 Flutter 請求主體中獲取 receiverId
+        const { receiverId } = req.body;
+        
+        // 確保你的認證中介軟體 (middleware) 已經將用戶 ID 附加到 req.user 上
+        const senderId = req.user.id; 
+
+        // 檢查請求主體是否包含 receiverId
+        if (!receiverId) {
+            return res.status(400).json({ message: '發送請求失敗：缺少接收者 ID。' });
+        }
+
+        // 避免用戶向自己發送請求
+        if (senderId === receiverId) {
+            return res.status(400).json({ message: '你無法向自己發送好友請求。' });
+        }
+
+        // 檢查是否已經存在待處理的請求或他們已是好友
+        const checkQuery = `
+            SELECT * FROM friend_requests 
+            WHERE 
+                (sender_id = $1 AND recipient_id = $2)
+                OR (sender_id = $2 AND recipient_id = $1 AND status = 'accepted')
+        `;
+        const checkResult = await pool.query(checkQuery, [senderId, receiverId]);
+        
+        if (checkResult.rows.length > 0) {
+            // 根據不同情況返回不同的訊息
+            const existingRequest = checkResult.rows[0];
+            if (existingRequest.status === 'pending') {
+                return res.status(409).json({ message: '好友請求已存在。' });
+            } else if (existingRequest.status === 'accepted') {
+                return res.status(409).json({ message: '你們已經是好友了。' });
+            }
+        }
+
+        // 插入新的好友請求到資料庫
+        const insertQuery = `
+            INSERT INTO friend_requests (sender_id, recipient_id, status)
+            VALUES ($1, $2, 'pending')
+            RETURNING *;
+        `;
+        const { rows } = await pool.query(insertQuery, [senderId, receiverId]);
+        const newRequest = rows[0];
+
+        res.status(200).json({ 
+            message: '好友請求發送成功。', 
+            request: {
+                _id: newRequest.id,
+                sender: senderId,
+                recipient: newRequest.recipient_id,
+                status: newRequest.status,
+            }
+        });
+    } catch (error) {
+        console.error('發送好友請求失敗:', error);
+        res.status(500).json({ message: '伺服器錯誤，無法發送好友請求。' });
+    }
+});
+
 // 獲取所有待處理的好友請求
 // GET /api/friends/requests
 router.get('/requests', async (req, res) => {
     try {
-        // 這裡需要根據你的認證系統來獲取當前用戶的 ID
-        const currentUserId = req.user.id; 
+        const currentUserId = req.user.id;
 
-        // 使用 SQL JOIN 查詢來獲取發送者的詳細資訊
         const query = `
             SELECT 
                 fr.id,
@@ -61,10 +105,6 @@ router.get('/requests', async (req, res) => {
         `;
 
         const { rows } = await pool.query(query, [currentUserId]);
-
-        if (rows.length === 0) {
-            return res.status(200).json({ message: '目前沒有待處理的好友請求。', requests: [] });
-        }
 
         // 將 SQL 查詢結果轉換成前端需要的格式
         const formattedRequests = rows.map(row => ({
@@ -96,7 +136,6 @@ router.post('/reject', async (req, res) => {
             return res.status(400).json({ message: '缺少好友請求 ID。' });
         }
 
-        // 檢查該請求是否存在且當前用戶是接收者
         const checkQuery = `
             SELECT recipient_id FROM friend_requests WHERE id = $1;
         `;
@@ -106,12 +145,10 @@ router.post('/reject', async (req, res) => {
             return res.status(404).json({ message: '找不到此好友請求。' });
         }
         
-        // 確保只有請求的接收者可以拒絕
         if (checkResult.rows[0].recipient_id !== currentUserId) {
             return res.status(403).json({ message: '你無權拒絕此請求。' });
         }
 
-        // 將狀態更新為 'rejected'
         const updateQuery = `
             UPDATE friend_requests 
             SET status = 'rejected'
