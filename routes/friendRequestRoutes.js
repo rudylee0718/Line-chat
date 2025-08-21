@@ -52,8 +52,8 @@ router.post('/request', protectRoute, async (req, res) => {
         const checkQuery = `
             SELECT * FROM friend_requests 
             WHERE 
-                (sender_id = $1 AND recipient_id = $2)
-                OR (sender_id = $2 AND recipient_id = $1);
+                (sender_id = $1::uuid AND recipient_id = $2::uuid)
+                OR (sender_id = $2::uuid AND recipient_id = $1::uuid);
         `;
         const checkResult = await pool.query(checkQuery, [senderId, receiverId]);
         
@@ -80,7 +80,7 @@ router.post('/request', protectRoute, async (req, res) => {
             message: '好友請求發送成功。', 
             request: {
                 _id: newRequest.id,
-                sender: newRequest.sender_id, // 使用 newRequest.sender_id 確保是正確的值
+                sender: newRequest.sender_id,
                 recipient: newRequest.recipient_id,
                 status: newRequest.status,
             }
@@ -101,14 +101,13 @@ router.get('/requests', protectRoute, async (req, res) => {
     try {
         const currentUserId = req.user.id;
         
-        // 修正: 在 SQL JOIN 條件中進行類型轉換
+        // 修正: 刪除不存在的 `u.avatar` 欄位
         const query = `
             SELECT 
                 fr.id,
                 fr.created_at,
                 u.id AS sender_id,
-                u.username AS sender_username,
-                u.avatar AS sender_avatar
+                u.username AS sender_username
             FROM 
                 friend_requests AS fr
             JOIN 
@@ -128,7 +127,6 @@ router.get('/requests', protectRoute, async (req, res) => {
             sender: {
                 _id: row.sender_id,
                 username: row.sender_username,
-                avatar: row.sender_avatar,
             }
         }));
 
