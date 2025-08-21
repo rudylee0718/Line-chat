@@ -3,8 +3,10 @@ const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
 
-// --- PostgreSQL 資料庫連線設定 (已修正) ---
-// 使用完整的 DATABASE_URL 並強制啟用 SSL，以適應 Render 等託管平台
+// 注意: 你需要確保你的認證中介軟體 (protectRoute) 在這裡被引入
+const protectRoute = require('../middleware/auth');
+
+// --- PostgreSQL 資料庫連線設定 ---
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
@@ -21,13 +23,20 @@ const pool = new Pool({
  * @access  Private (需要認證)
  * @body    { receiverId: '要發送請求的用戶 ID' }
  */
-router.post('/request', async (req, res) => {
+// 修正: 在這裡加入 protectRoute 中介軟體
+router.post('/request', protectRoute, async (req, res) => {
     try {
+        // 從認證中介軟體中獲取 senderId
+        const senderId = req.user.id;
+        
         // 從 Flutter 請求主體中獲取 receiverId
         const { receiverId } = req.body;
         
-        // 確保你的認證中介軟體 (middleware) 已經將用戶 ID 附加到 req.user 上
-        const senderId = req.user.id; 
+        // 額外檢查: 確保 senderId 存在，以防認證中介軟體出錯
+        if (!senderId) {
+            console.error('發送好友請求失敗: 認證使用者 ID 不存在');
+            return res.status(401).json({ message: '認證失敗，請重新登入。' });
+        }
 
         // 檢查請求主體是否包含 receiverId
         if (!receiverId) {
@@ -43,11 +52,8 @@ router.post('/request', async (req, res) => {
         const checkQuery = `
             SELECT * FROM friend_requests 
             WHERE 
-                -- 檢查是否已存在待處理的請求 (無論誰發送給誰)
-                (sender_id = $1 AND recipient_id = $2 AND status = 'pending')
-                OR (sender_id = $2 AND recipient_id = $1 AND status = 'pending')
-                -- 檢查是否已經是好友 (無論誰發送給誰)
-                OR ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)) AND status = 'accepted'
+                (sender_id = $1 AND recipient_id = $2)
+                OR (sender_id = $2 AND recipient_id = $1);
         `;
         const checkResult = await pool.query(checkQuery, [senderId, receiverId]);
         
@@ -64,7 +70,7 @@ router.post('/request', async (req, res) => {
         // 插入新的好友請求到資料庫
         const insertQuery = `
             INSERT INTO friend_requests (sender_id, recipient_id, status)
-            VALUES ($1, $2, 'pending')
+            VALUES ($1::uuid, $2::uuid, 'pending')
             RETURNING *;
         `;
         const { rows } = await pool.query(insertQuery, [senderId, receiverId]);
@@ -74,7 +80,7 @@ router.post('/request', async (req, res) => {
             message: '好友請求發送成功。', 
             request: {
                 _id: newRequest.id,
-                sender: senderId,
+                sender: newRequest.sender_id, // 使用 newRequest.sender_id 確保是正確的值
                 recipient: newRequest.recipient_id,
                 status: newRequest.status,
             }
@@ -85,12 +91,17 @@ router.post('/request', async (req, res) => {
     }
 });
 
-// 獲取所有待處理的好友請求
-// GET /api/friends/requests
-router.get('/requests', async (req, res) => {
+/**
+ * @route   GET /api/friends/requests
+ * @desc    獲取所有待處理的好友請求
+ * @access  Private
+ */
+// 修正: 在這裡加入 protectRoute 中介軟體
+router.get('/requests', protectRoute, async (req, res) => {
     try {
         const currentUserId = req.user.id;
-
+        
+        // 修正: 在 SQL JOIN 條件中進行類型轉換
         const query = `
             SELECT 
                 fr.id,
@@ -101,9 +112,9 @@ router.get('/requests', async (req, res) => {
             FROM 
                 friend_requests AS fr
             JOIN 
-                users AS u ON fr.sender_id = u.id
+                users AS u ON fr.sender_id = u.id::uuid
             WHERE 
-                fr.recipient_id = $1 AND fr.status = 'pending'
+                fr.recipient_id = $1::uuid AND fr.status = 'pending'
             ORDER BY
                 fr.created_at DESC;
         `;
@@ -131,7 +142,8 @@ router.get('/requests', async (req, res) => {
 // 拒絕一個好友請求
 // POST /api/friends/reject
 // 請求主體 (body) 應包含 { requestId: '...' }
-router.post('/reject', async (req, res) => {
+// 修正: 在這裡加入 protectRoute 中介軟體
+router.post('/reject', protectRoute, async (req, res) => {
     try {
         const { requestId } = req.body;
         const currentUserId = req.user.id; 
@@ -140,8 +152,9 @@ router.post('/reject', async (req, res) => {
             return res.status(400).json({ message: '缺少好友請求 ID。' });
         }
 
+        // 修正: 確保傳入的 ID 類型正確
         const checkQuery = `
-            SELECT recipient_id FROM friend_requests WHERE id = $1;
+            SELECT recipient_id FROM friend_requests WHERE id = $1::uuid;
         `;
         const checkResult = await pool.query(checkQuery, [requestId]);
 
@@ -153,10 +166,11 @@ router.post('/reject', async (req, res) => {
             return res.status(403).json({ message: '你無權拒絕此請求。' });
         }
 
+        // 修正: 確保傳入的 ID 類型正確
         const updateQuery = `
             UPDATE friend_requests 
             SET status = 'rejected'
-            WHERE id = $1 AND recipient_id = $2
+            WHERE id = $1::uuid AND recipient_id = $2::uuid
             RETURNING id;
         `;
         await pool.query(updateQuery, [requestId, currentUserId]);
